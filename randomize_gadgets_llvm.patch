@@ -1,0 +1,155 @@
+From 922ddccd8649fc474d5743054a3df25d20fcf31a Mon Sep 17 00:00:00 2001
+From: Michael Brengel <mbrengel@mmci.uni-saarland.de>
+Date: Sat, 14 Mar 2015 01:29:00 +0100
+Subject: [PATCH] Randomize Gadgets
+
+---
+ include/llvm/CodeGen/CommandFlags.h |    5 +++++
+ include/llvm/Target/TargetOptions.h |    5 ++++-
+ lib/Target/X86/X86AsmPrinter.cpp    |   25 +++++++++++++++++++++++++
+ lib/Target/X86/X86InstrInfo.cpp     |    5 +++++
+ lib/Target/X86/X86InstrInfo.h       |    2 ++
+ lib/Target/X86/X86RegisterInfo.cpp  |    9 +++++++++
+ 6 files changed, 50 insertions(+), 1 deletion(-)
+
+diff --git a/include/llvm/CodeGen/CommandFlags.h b/include/llvm/CodeGen/CommandFlags.h
+index 9f86429..d9d3dd0 100644
+--- a/include/llvm/CodeGen/CommandFlags.h
++++ b/include/llvm/CodeGen/CommandFlags.h
+@@ -207,6 +207,10 @@ FunctionSections("function-sections",
+                  cl::desc("Emit functions into separate sections"),
+                  cl::init(false));
+ 
++cl::opt<bool> RandomizeGadgets("randomize-gadgets",
++                               cl::desc("Foo"),
++                               cl::init(false));
++
+ cl::opt<bool> UniqueSectionNames("unique-section-names",
+                                  cl::desc("Give unique names to every section"),
+                                  cl::init(true));
+@@ -288,6 +292,7 @@ static inline TargetOptions InitTargetOptionsFromCodeGenFlags() {
+   Options.UseInitArray = !UseCtors;
+   Options.DataSections = DataSections;
+   Options.FunctionSections = FunctionSections;
++  Options.RandomizeGadgets = RandomizeGadgets;
+   Options.UniqueSectionNames = UniqueSectionNames;
+ 
+   Options.MCOptions = InitMCTargetOptionsFromFlags();
+diff --git a/include/llvm/Target/TargetOptions.h b/include/llvm/Target/TargetOptions.h
+index f447fd6..3f1f758 100644
+--- a/include/llvm/Target/TargetOptions.h
++++ b/include/llvm/Target/TargetOptions.h
+@@ -78,7 +78,8 @@ namespace llvm {
+           EnableFastISel(false), PositionIndependentExecutable(false),
+           UseInitArray(false), DisableIntegratedAS(false),
+           CompressDebugSections(false), FunctionSections(false),
+-          DataSections(false), UniqueSectionNames(true), TrapUnreachable(false),
++          DataSections(false), RandomizeGadgets(false),
++          UniqueSectionNames(true), TrapUnreachable(false),
+           TrapFuncName(), FloatABIType(FloatABI::Default),
+           AllowFPOpFusion(FPOpFusion::Standard), JTType(JumpTable::Single),
+           FCFI(false), ThreadModel(ThreadModel::POSIX),
+@@ -198,6 +199,8 @@ namespace llvm {
+     /// Emit data into separate sections.
+     unsigned DataSections : 1;
+ 
++    unsigned RandomizeGadgets : 1;
++
+     unsigned UniqueSectionNames : 1;
+ 
+     /// Emit target-specific trap instruction for 'unreachable' IR instructions.
+diff --git a/lib/Target/X86/X86AsmPrinter.cpp b/lib/Target/X86/X86AsmPrinter.cpp
+index bb0b9ce..7a30491 100644
+--- a/lib/Target/X86/X86AsmPrinter.cpp
++++ b/lib/Target/X86/X86AsmPrinter.cpp
+@@ -19,6 +19,7 @@
+ #include "X86MachineFunctionInfo.h"
+ #include "llvm/ADT/SmallString.h"
+ #include "llvm/CodeGen/MachineConstantPool.h"
++#include "llvm/CodeGen/MachineInstrBuilder.h"
+ #include "llvm/CodeGen/MachineModuleInfoImpls.h"
+ #include "llvm/CodeGen/MachineValueType.h"
+ #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
+@@ -47,6 +48,30 @@ using namespace llvm;
+ /// runOnMachineFunction - Emit the function body.
+ ///
+ bool X86AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
++  //
++  if (MF.getTarget().Options.RandomizeGadgets) {
++    auto &first = MF.front();
++    auto &last = MF.back();
++    const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
++    DebugLoc DL;
++
++    for (int i = 0; i < 2; i++)
++      TII->insertNoop(first, first.begin());
++    BuildMI(first, first.begin(), DL, TII->get(X86::CMP64ri32), X86::R12).addImm(42);
++    for (int i = 0; i < 20; i++)
++      TII->insertNoop(last, last.end());
++
++    for (auto &BB : MF) {
++      for (MachineBasicBlock::iterator I = BB.begin(), E = BB.end(); I != E; I++) {
++        MachineInstr* II = I;
++        if (II->isReturn())
++          BuildMI(BB, II, DL, TII->get(X86::MOV64ri32), X86::R12).addImm(42);
++        else if (II->isCall())
++          BuildMI(BB, II, DL, TII->get(X86::MOV64ri32), X86::R12).addImm(0);
++      }
++    }
++  }
++  //
+   Subtarget = &MF.getSubtarget<X86Subtarget>();
+ 
+   SMShadowTracker.startFunction(MF);
+diff --git a/lib/Target/X86/X86InstrInfo.cpp b/lib/Target/X86/X86InstrInfo.cpp
+index 4cdca97..0deec7d 100644
+--- a/lib/Target/X86/X86InstrInfo.cpp
++++ b/lib/Target/X86/X86InstrInfo.cpp
+@@ -6069,6 +6069,11 @@ void X86InstrInfo::setExecutionDomain(MachineInstr *MI, unsigned Domain) const {
+   MI->setDesc(get(table[Domain-1]));
+ }
+ 
++void X86InstrInfo::insertNoop(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI) const {
++  DebugLoc DL;
++  BuildMI(MBB, MI, DL, get(X86::NOOP));
++}
++
+ /// Return the noop instruction to use for a noop.
+ void X86InstrInfo::getNoopForMachoTarget(MCInst &NopInst) const {
+   NopInst.setOpcode(X86::NOOP);
+diff --git a/lib/Target/X86/X86InstrInfo.h b/lib/Target/X86/X86InstrInfo.h
+index 0dd8101..3bbb650 100644
+--- a/lib/Target/X86/X86InstrInfo.h
++++ b/lib/Target/X86/X86InstrInfo.h
+@@ -364,6 +364,8 @@ public:
+   bool shouldScheduleAdjacent(MachineInstr* First,
+                               MachineInstr *Second) const override;
+ 
++  void insertNoop(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI) const override;
++
+   void getNoopForMachoTarget(MCInst &NopInst) const override;
+ 
+   bool
+diff --git a/lib/Target/X86/X86RegisterInfo.cpp b/lib/Target/X86/X86RegisterInfo.cpp
+index a444f37..ca7474b 100644
+--- a/lib/Target/X86/X86RegisterInfo.cpp
++++ b/lib/Target/X86/X86RegisterInfo.cpp
+@@ -381,6 +381,15 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
+   Reserved.set(X86::FS);
+   Reserved.set(X86::GS);
+ 
++  // If -frandomize-gadgets is set, reserve the R12 register as it is used
++  // for protection against entry point gadgets
++  if (MF.getTarget().Options.RandomizeGadgets) {
++    Reserved.set(X86::R12);
++    Reserved.set(X86::R12B);
++    Reserved.set(X86::R12W);
++    Reserved.set(X86::R12D);
++  }
++
+   // Mark the floating point stack registers as reserved.
+   for (unsigned n = 0; n != 8; ++n)
+     Reserved.set(X86::ST0 + n);
+-- 
+1.7.10.4
+

@@ -1,0 +1,82 @@
+From 34ac957c80e164ff66f4f617419cff40c5c31ca3 Mon Sep 17 00:00:00 2001
+From: Michael Brengel <mbrengel@mmci.uni-saarland.de>
+Date: Sat, 14 Mar 2015 01:29:22 +0100
+Subject: [PATCH] Randomize Gadgets
+
+---
+ include/clang/Driver/Options.td           |    2 ++
+ include/clang/Frontend/CodeGenOptions.def |    1 +
+ lib/CodeGen/BackendUtil.cpp               |    1 +
+ lib/Driver/Tools.cpp                      |    6 ++++++
+ lib/Frontend/CompilerInvocation.cpp       |    1 +
+ 5 files changed, 11 insertions(+)
+
+diff --git a/include/clang/Driver/Options.td b/include/clang/Driver/Options.td
+index 977e925..d11c080 100644
+--- a/include/clang/Driver/Options.td
++++ b/include/clang/Driver/Options.td
+@@ -1010,6 +1010,8 @@ def fdata_sections : Flag <["-"], "fdata-sections">, Group<f_Group>,
+ def fno_data_sections : Flag <["-"], "fno-data-sections">, Group<f_Group>,
+   Flags<[CC1Option]>;
+ 
++def frandomize_gadgets : Flag <["-"], "frandomize-gadgets">,
++ Group<f_Group>, Flags<[CC1Option]>, HelpText<"Foo">;
+ def funique_section_names : Flag <["-"], "funique-section-names">,
+   Group<f_Group>, Flags<[CC1Option]>,
+   HelpText<"Use unique names for text and data sections (ELF Only)">;
+diff --git a/include/clang/Frontend/CodeGenOptions.def b/include/clang/Frontend/CodeGenOptions.def
+index f14898f..6402886 100644
+--- a/include/clang/Frontend/CodeGenOptions.def
++++ b/include/clang/Frontend/CodeGenOptions.def
+@@ -40,6 +40,7 @@ CODEGENOPT(CXAAtExit         , 1, 1) ///< Use __cxa_atexit for calling destructo
+ CODEGENOPT(CXXCtorDtorAliases, 1, 0) ///< Emit complete ctors/dtors as linker
+                                      ///< aliases to base ctors when possible.
+ CODEGENOPT(DataSections      , 1, 0) ///< Set when -fdata-sections is enabled.
++CODEGENOPT(RandomizeGadgets  , 1, 0) ///< Set when -frandomize-gadgets is enabled.
+ CODEGENOPT(UniqueSectionNames, 1, 1) ///< Set for -funique-section-names.
+ CODEGENOPT(DisableFPElim     , 1, 0) ///< Set when -fomit-frame-pointer is enabled.
+ CODEGENOPT(DisableFree       , 1, 0) ///< Don't free memory.
+diff --git a/lib/CodeGen/BackendUtil.cpp b/lib/CodeGen/BackendUtil.cpp
+index d3d5bcf..df711d0 100644
+--- a/lib/CodeGen/BackendUtil.cpp
++++ b/lib/CodeGen/BackendUtil.cpp
+@@ -524,6 +524,7 @@ TargetMachine *EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
+   Options.PositionIndependentExecutable = LangOpts.PIELevel != 0;
+   Options.FunctionSections = CodeGenOpts.FunctionSections;
+   Options.DataSections = CodeGenOpts.DataSections;
++  Options.RandomizeGadgets = CodeGenOpts.RandomizeGadgets;
+   Options.UniqueSectionNames = CodeGenOpts.UniqueSectionNames;
+ 
+   Options.MCOptions.MCRelaxAll = CodeGenOpts.RelaxAll;
+diff --git a/lib/Driver/Tools.cpp b/lib/Driver/Tools.cpp
+index ece5f1b..16eed3a 100644
+--- a/lib/Driver/Tools.cpp
++++ b/lib/Driver/Tools.cpp
+@@ -3330,6 +3330,12 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
+     CmdArgs.push_back("-fdata-sections");
+   }
+ 
++  if (Args.hasArg(options::OPT_frandomize_gadgets)) {
++    CmdArgs.push_back("-frandomize-gadgets");
++    CmdArgs.push_back("-mcode-model");
++    CmdArgs.push_back("large");
++  }
++
+   if (!Args.hasFlag(options::OPT_funique_section_names,
+                     options::OPT_fno_unique_section_names, true))
+     CmdArgs.push_back("-fno-unique-section-names");
+diff --git a/lib/Frontend/CompilerInvocation.cpp b/lib/Frontend/CompilerInvocation.cpp
+index 962e8e1..4b7f2df 100644
+--- a/lib/Frontend/CompilerInvocation.cpp
++++ b/lib/Frontend/CompilerInvocation.cpp
+@@ -472,6 +472,7 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
+                                        OPT_fno_function_sections, false);
+   Opts.DataSections = Args.hasFlag(OPT_fdata_sections,
+                                    OPT_fno_data_sections, false);
++  Opts.RandomizeGadgets = Args.hasArg(OPT_frandomize_gadgets);
+   Opts.UniqueSectionNames = Args.hasFlag(OPT_funique_section_names,
+                                          OPT_fno_unique_section_names, true);
+ 
+-- 
+1.7.10.4
+
